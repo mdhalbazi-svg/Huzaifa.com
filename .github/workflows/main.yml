@@ -1,0 +1,178 @@
+
+name: Lost and Found Pakistan Android Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "Lost-Found-Pakistan-Android-Source-2.zip"
+      - ".github/workflows/main.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Android APK and AAB
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install ZIP Tools
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
+      - name: Extract Application Source
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP_FILE="Lost-Found-Pakistan-Android-Source-2.zip"
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: Source ZIP file not found: $ZIP_FILE"
+            ls -la
+            exit 1
+          fi
+
+          mkdir -p extracted
+
+          unzip -q "$ZIP_FILE" -d extracted
+
+          PACKAGE_FILE=$(find extracted -type f -name package.json \
+            -not -path '*/node_modules/*' -print -quit)
+
+          if [ -z "$PACKAGE_FILE" ]; then
+            echo "ERROR: package.json not found in ZIP"
+            exit 1
+          fi
+
+          SOURCE_DIR=$(dirname "$PACKAGE_FILE")
+
+          cp -a "$SOURCE_DIR"/. "$GITHUB_WORKSPACE"/
+
+          test -f package.json
+
+          echo "Application source extracted successfully."
+
+      - name: Install Dependencies
+        run: |
+          set -euo pipefail
+
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Verify Capacitor Configuration
+        run: |
+          set -euo pipefail
+
+          if [ ! -f capacitor.config.json ] && \
+             [ ! -f capacitor.config.ts ] && \
+             [ ! -f capacitor.config.js ]; then
+            echo "ERROR: Capacitor configuration not found."
+            exit 1
+          fi
+
+          if ! npm ls @capacitor/core --depth=0; then
+            echo "ERROR: Capacitor core dependency missing."
+            exit 1
+          fi
+
+          if ! npm ls @capacitor/android --depth=0; then
+            echo "ERROR: Capacitor Android dependency missing."
+            exit 1
+          fi
+
+      - name: Build Web Application
+        run: |
+          set -euo pipefail
+
+          npm run build
+
+      - name: Verify Build Output
+        run: |
+          set -euo pipefail
+
+          if [ ! -d dist ] && [ ! -d www ]; then
+            echo "ERROR: Neither dist nor www directory exists."
+            exit 1
+          fi
+
+      - name: Add Android Platform
+        run: |
+          set -euo pipefail
+
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
+
+      - name: Synchronize Android Project
+        run: |
+          set -euo pipefail
+
+          npx cap sync android
+
+          test -f android/gradlew
+
+      - name: Build Debug APK
+        run: |
+          set -euo pipefail
+
+          chmod +x android/gradlew
+
+          cd android
+
+          ./gradlew assembleDebug
+
+      - name: Build Release AAB
+        run: |
+          set -euo pipefail
+
+          cd android
+
+          ./gradlew bundleRelease
+
+      - name: Verify APK and AAB
+        run: |
+          set -euo pipefail
+
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+
+          AAB="android/app/build/outputs/bundle/release/app-release.aab"
+
+          test -s "$APK"
+          test -s "$AAB"
+
+          echo "APK and AAB files generated successfully."
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lost-Found-Pakistan-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lost-Found-Pakistan-AAB
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          
